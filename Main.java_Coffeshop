@@ -1,0 +1,1996 @@
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
+import java.math.BigDecimal;
+import java.text.NumberFormat;
+import java.util.*;
+import java.util.List;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+public class Main extends JFrame {
+
+    // COLORES DEL SISTEMA
+    private final Color FONDO = new Color(245, 240, 232);
+    private final Color CAFE = new Color(75, 45, 30);
+    private final Color VERDE = new Color(45, 125, 85);
+    private final Color ROJO = new Color(180, 65, 65);
+    private final Color BLANCO = Color.WHITE;
+
+    // MONEDA EN DOLARES
+    private final NumberFormat monedaUSD =
+        NumberFormat.getCurrencyInstance(Locale.US);
+
+    // EMPLEADOS
+    private final String[] vendedores = {
+        "Stefan Salvatore",
+        "Enzo",
+        "Katherine Pierce"
+    };
+
+    // IDENTIFICACION DE EMPLEADOS
+    private final Map<Integer, String> empleadosPorId = new LinkedHashMap<>();
+    private final Random aleatorio = new Random();
+
+    // COLA DE CLIENTES (FIFO: primero en llegar, primero en atender)
+    private final Queue<Pedido> colaLlegada = new ArrayDeque<>();
+    private int siguienteTurno = 1;
+    private Pedido pedidoEnAtencion = null;
+
+    // ARCHIVO DE PERSISTENCIA
+    // Los datos generales se mantienen en la carpeta COFFEESHOP del usuario.
+    private static final File CARPETA_DATOS =
+        new File("COFFEESHOP");
+    private static final File ARCHIVO_DATOS =
+        new File(CARPETA_DATOS, "coffeeshop_datos.dat");
+    private static final File ARCHIVO_VENTAS =
+        new File(CARPETA_DATOS, "reporte_ventas.csv");
+
+    // Los tickets TXT y CSV se guardan junto a Main.java, en la carpeta indicada.
+    private static final File CARPETA_FACTURAS =
+        new File(CARPETA_DATOS, "factura");
+        
+    private static final DateTimeFormatter FORMATO_FECHA =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    // ESTRUCTURAS DE DATOS
+    private final Queue<Venta> historial = new ArrayDeque<>();
+    private final Set<String> productosUnicos = new HashSet<>();
+
+    // Clientes registrados: evita duplicados comparando el nombre completo.
+    // Se guarda sin distinguir mayúsculas, tildes ni espacios repetidos.
+    private final Set<String> clientesRegistrados = new LinkedHashSet<>();
+
+    private final Map<String, Integer> ventasPorVendedor =
+        new LinkedHashMap<>();
+
+    private final Map<String, Long> dineroPorVendedor =
+        new LinkedHashMap<>();
+
+    // INVENTARIO Y CARRITO
+    private final List<Producto> inventario = new ArrayList<>();
+
+    private final Map<Producto, Integer> carrito =
+        new LinkedHashMap<>();
+
+    // COMPONENTES
+    private JPanel panelProductos;
+    private JPanel panelCarrito;
+
+    private JLabel lblUnidades;
+    private JLabel lblSubtotal;
+    private JLabel lblTotal;
+    private JLabel lblCambio;
+
+    private JTextField txtRecibido;
+    private JTextField txtBuscarProducto;
+    private JComboBox<String> cmbVendedor;
+    private JLabel lblPedidoAtencion;
+
+    private String categoriaActual = "Todos";
+
+    private long totalActual = 0;
+
+    private boolean turnoFinalizado = false;
+
+    // CONSTRUCTOR
+    public Main() {
+
+        setTitle("CAFFEESHOP - Punto de Venta");
+        setSize(1250, 780);
+        setMinimumSize(new Dimension(1000, 650));
+
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        setLocationRelativeTo(null);
+        getContentPane().setBackground(FONDO);
+
+        cargarInventario();
+        inicializarVendedores();
+        cargarDatos();
+
+        // Si el turno anterior fue cerrado, habilitar uno nuevo al iniciar.
+        // El historial, las ventas y el inventario se conservan.
+        if (turnoFinalizado) {
+            turnoFinalizado = false;
+            carrito.clear();
+            pedidoEnAtencion = null;
+            guardarDatos();
+        }
+        reconstruirReporteCSV();
+
+        construirInterfaz();
+        mostrarProductos();
+        actualizarCarrito();
+        actualizarEtiquetaAtencion();
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                guardarDatos();
+                dispose();
+                System.exit(0);
+            }
+        });
+    }
+
+    // ==========================================
+    // INVENTARIO INICIAL
+    // ==========================================
+
+    private void cargarInventario() {
+
+        agregarProducto("Espresso", "Cafés", 250, 100, "☕");
+        agregarProducto("Americano", "Cafés", 300, 100, "☕");
+        agregarProducto("Capuchino", "Cafés", 425, 100, "☕");
+        agregarProducto("Latte", "Cafés", 450, 100, "🥛");
+        agregarProducto("Mocaccino", "Cafés", 475, 100, "☕");
+
+        agregarProducto("Chocolate", "Bebidas", 350, 100, "🍫");
+        agregarProducto("Té", "Bebidas", 200, 100, "🍵");
+        agregarProducto("Limonada", "Bebidas", 350, 100, "🍋");
+        agregarProducto("Jugo de naranja", "Bebidas", 400, 100, "🍊");
+        agregarProducto("Agua", "Bebidas", 150, 100, "💧");
+        agregarProducto("Coca-Cola", "Bebidas", 300, 100, "🥤");
+
+        agregarProducto("Torta de chocolate", "Postres", 450, 100, "🍰");
+        agregarProducto("Cheesecake", "Postres", 500, 100, "🍰");
+        agregarProducto("Brownie", "Postres", 300, 100, "🍫");
+        agregarProducto("Galletas", "Postres", 200, 100, "🍪");
+        agregarProducto("Dona", "Postres", 250, 100, "🍩");
+
+        agregarProducto("Croissant", "Comidas", 350, 100, "🥐");
+        agregarProducto("Sándwich", "Comidas", 600, 100, "🥪");
+        agregarProducto("Pizza personal", "Comidas", 700, 100, "🍕");
+        agregarProducto("Empanada", "Comidas", 200, 100, "🥟");
+        agregarProducto("Hamburguesa", "Comidas", 850, 100, "🍔");
+        agregarProducto("Salchipapas", "Comidas", 300, 100, "🍟");
+    }
+
+    private void agregarProducto(
+        String nombre,
+        String categoria,
+        long precioCentavos,
+        int stock,
+        String icono
+    ) {
+
+        Producto producto = new Producto(
+            nombre, categoria, precioCentavos, stock, icono
+        );
+
+        inventario.add(producto);
+        productosUnicos.add(nombre);
+    }
+
+    private void inicializarVendedores() {
+
+        int[] ids = {1001, 1002, 1003};
+        for (int i = 0; i < vendedores.length; i++) {
+            String vendedor = vendedores[i];
+            ventasPorVendedor.put(vendedor, 0);
+            dineroPorVendedor.put(vendedor, 0L);
+            empleadosPorId.put(ids[i], vendedor);
+        }
+    }
+
+    // ==========================================
+    // INTERFAZ PRINCIPAL
+    // ==========================================
+
+    private void construirInterfaz() {
+
+        setLayout(new BorderLayout(10, 10));
+
+        // ENCABEZADO
+        JPanel encabezado = new JPanel(new BorderLayout());
+        encabezado.setBackground(CAFE);
+        encabezado.setBorder(
+            new EmptyBorder(15, 22, 15, 22)
+        );
+
+        JLabel titulo = new JLabel("COFFEESHOP");
+        titulo.setForeground(Color.WHITE);
+        titulo.setFont(new Font("Arial", Font.BOLD, 28));
+
+        JLabel subtitulo = new JLabel(
+            "SISTEMA DE PUNTO DE VENTA E INVENTARIO"
+        );
+        subtitulo.setForeground(Color.WHITE);
+        subtitulo.setFont(new Font("Arial", Font.BOLD, 13));
+
+        JPanel textos = new JPanel(new GridLayout(2, 1));
+        textos.setOpaque(false);
+        textos.add(titulo);
+        textos.add(subtitulo);
+
+        JPanel acciones = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+        acciones.setOpaque(false);
+
+        JButton btnLlegada = crearBoton("REGISTRAR LLEGADA", VERDE);
+        JButton btnAtender = crearBoton("ATENDER SIGUIENTE", CAFE);
+        JButton btnVerCola = crearBoton("VER FILA", CAFE);
+        JButton btnEmpleados = crearBoton("BUSCAR EMPLEADO", CAFE);
+        JButton btnStock = crearBoton("ADMINISTRAR STOCK", CAFE);
+
+        btnLlegada.addActionListener(e -> registrarLlegada());
+        btnAtender.addActionListener(e -> atenderSiguiente());
+        btnVerCola.addActionListener(e -> mostrarColaLlegada());
+        btnEmpleados.addActionListener(e -> buscarEmpleadoPorId());
+        btnStock.addActionListener(e -> administrarStock());
+
+        acciones.add(btnLlegada);
+        acciones.add(btnAtender);
+        acciones.add(btnVerCola);
+        acciones.add(btnEmpleados);
+        acciones.add(btnStock);
+
+        encabezado.add(textos, BorderLayout.WEST);
+        encabezado.add(acciones, BorderLayout.EAST);
+
+        add(encabezado, BorderLayout.NORTH);
+
+        // CUERPO
+        JPanel cuerpo = new JPanel(new BorderLayout(12, 12));
+        cuerpo.setBackground(FONDO);
+        cuerpo.setBorder(new EmptyBorder(12, 12, 12, 12));
+
+        // CATALOGO
+        JPanel izquierda = new JPanel(new BorderLayout(8, 8));
+        izquierda.setBackground(FONDO);
+
+        JLabel tituloProductos = new JLabel("MENÚ DE PRODUCTOS");
+        tituloProductos.setForeground(CAFE);
+        tituloProductos.setFont(
+            new Font("Arial", Font.BOLD, 21)
+        );
+
+        JPanel encabezadoProductos = new JPanel(new BorderLayout(8, 5));
+        encabezadoProductos.setBackground(FONDO);
+        encabezadoProductos.add(tituloProductos, BorderLayout.NORTH);
+
+        JPanel busqueda = new JPanel(new BorderLayout(5, 0));
+        busqueda.setBackground(FONDO);
+        txtBuscarProducto = new JTextField();
+        txtBuscarProducto.setFont(new Font("Arial", Font.PLAIN, 15));
+        txtBuscarProducto.setToolTipText("Escribe el nombre del producto");
+        JButton btnBuscar = crearBoton("BUSCAR", CAFE);
+        JButton btnLimpiar = crearBoton("LIMPIAR", CAFE);
+        btnBuscar.addActionListener(e -> mostrarProductos());
+        btnLimpiar.addActionListener(e -> {
+            txtBuscarProducto.setText("");
+            categoriaActual = "Todos";
+            mostrarProductos();
+        });
+        busqueda.add(txtBuscarProducto, BorderLayout.CENTER);
+        JPanel botonesBusqueda = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        botonesBusqueda.setOpaque(false);
+        botonesBusqueda.add(btnBuscar);
+        botonesBusqueda.add(btnLimpiar);
+        busqueda.add(botonesBusqueda, BorderLayout.EAST);
+        encabezadoProductos.add(busqueda, BorderLayout.SOUTH);
+        izquierda.add(encabezadoProductos, BorderLayout.NORTH);
+
+        // CATEGORIAS
+        JPanel categorias = new JPanel(
+            new FlowLayout(FlowLayout.LEFT, 7, 5)
+        );
+
+        categorias.setBackground(FONDO);
+
+        String[] nombresCategorias = {
+            "Todos", "Cafés", "Bebidas", "Postres", "Comidas"
+        };
+
+        for (String categoria : nombresCategorias) {
+
+            JButton boton = crearBoton(categoria, CAFE);
+
+            boton.addActionListener(e -> {
+                categoriaActual = categoria;
+                mostrarProductos();
+            });
+
+            categorias.add(boton);
+        }
+
+        encabezadoProductos.add(categorias, BorderLayout.CENTER);
+
+        // TARJETAS
+        panelProductos = new JPanel(
+            new GridLayout(0, 3, 12, 12)
+        );
+
+        panelProductos.setBackground(FONDO);
+        panelProductos.setBorder(
+            new EmptyBorder(10, 5, 10, 5)
+        );
+
+        JScrollPane scrollProductos =
+            new JScrollPane(panelProductos);
+
+        scrollProductos.setBorder(null);
+        scrollProductos.getViewport().setBackground(FONDO);
+
+        izquierda.add(scrollProductos, BorderLayout.CENTER);
+
+        // CARRITO
+        panelCarrito = new JPanel();
+
+        panelCarrito.setLayout(
+            new BoxLayout(panelCarrito, BoxLayout.Y_AXIS)
+        );
+
+        panelCarrito.setBackground(BLANCO);
+        panelCarrito.setBorder(
+            new EmptyBorder(10, 10, 10, 10)
+        );
+
+        JScrollPane scrollCarrito =
+            new JScrollPane(panelCarrito);
+
+        scrollCarrito.setPreferredSize(
+            new Dimension(340, 350)
+        );
+
+        scrollCarrito.setBorder(
+            BorderFactory.createLineBorder(
+                new Color(210, 200, 190)
+            )
+        );
+
+        JPanel derecha = new JPanel(new BorderLayout(5, 8));
+        derecha.setPreferredSize(new Dimension(355, 0));
+        derecha.setBackground(FONDO);
+
+        JLabel tituloCarrito = new JLabel("PEDIDO ACTUAL");
+        tituloCarrito.setForeground(CAFE);
+        tituloCarrito.setFont(
+            new Font("Arial", Font.BOLD, 20)
+        );
+
+        JPanel encabezadoPedido = new JPanel(new GridLayout(2, 1, 2, 2));
+        encabezadoPedido.setBackground(FONDO);
+        lblPedidoAtencion = crearEtiqueta("Sin cliente en atención", 12);
+        encabezadoPedido.add(tituloCarrito);
+        encabezadoPedido.add(lblPedidoAtencion);
+        derecha.add(encabezadoPedido, BorderLayout.NORTH);
+        derecha.add(scrollCarrito, BorderLayout.CENTER);
+
+        derecha.add(crearPanelPago(), BorderLayout.SOUTH);
+
+        cuerpo.add(izquierda, BorderLayout.CENTER);
+        cuerpo.add(derecha, BorderLayout.EAST);
+
+        add(cuerpo, BorderLayout.CENTER);
+
+        // BOTONES INFERIORES
+        JPanel pie = new JPanel(
+            new FlowLayout(FlowLayout.RIGHT, 10, 10)
+        );
+
+        pie.setBackground(CAFE);
+
+        JButton btnCancelar =
+            crearBoton("CANCELAR PEDIDO", ROJO);
+
+        JButton btnNueva =
+            crearBoton("NUEVA VENTA", CAFE);
+
+        JButton btnFinalizar =
+            crearBoton("FINALIZAR TURNO", VERDE);
+
+        btnCancelar.addActionListener(e -> cancelarPedido());
+        btnNueva.addActionListener(e -> nuevaVenta());
+        btnFinalizar.addActionListener(e -> finalizarTurno());
+
+        pie.add(btnCancelar);
+        pie.add(btnNueva);
+        pie.add(btnFinalizar);
+
+        add(pie, BorderLayout.SOUTH);
+    }
+
+    // ==========================================
+    // PANEL DE PAGO
+    // ==========================================
+
+    private JPanel crearPanelPago() {
+
+        JPanel panel = new JPanel();
+
+        panel.setLayout(
+            new BoxLayout(panel, BoxLayout.Y_AXIS)
+        );
+
+        panel.setBackground(FONDO);
+        panel.setBorder(
+            new EmptyBorder(12, 12, 12, 12)
+        );
+
+        cmbVendedor = new JComboBox<>(vendedores);
+
+        lblUnidades = crearEtiqueta("Unidades: 0", 14);
+        lblSubtotal = crearEtiqueta("Subtotal: US$0.00", 14);
+        lblTotal = crearEtiqueta("TOTAL: US$0.00", 21);
+        lblCambio = crearEtiqueta("Cambio: US$0.00", 15);
+
+        txtRecibido = new JTextField();
+        txtRecibido.setFont(
+            new Font("Arial", Font.BOLD, 16)
+        );
+
+        txtRecibido.setForeground(Color.BLACK);
+        txtRecibido.setMaximumSize(
+            new Dimension(Integer.MAX_VALUE, 35)
+        );
+
+        txtRecibido.getDocument().addDocumentListener(
+            new javax.swing.event.DocumentListener() {
+
+                public void insertUpdate(
+                    javax.swing.event.DocumentEvent e
+                ) {
+                    calcularCambio();
+                }
+
+                public void removeUpdate(
+                    javax.swing.event.DocumentEvent e
+                ) {
+                    calcularCambio();
+                }
+
+                public void changedUpdate(
+                    javax.swing.event.DocumentEvent e
+                ) {
+                    calcularCambio();
+                }
+            }
+        );
+
+        JButton btnCobrar = crearBoton(
+            "COBRAR VENTA", VERDE
+        );
+
+        btnCobrar.setMaximumSize(
+            new Dimension(Integer.MAX_VALUE, 45)
+        );
+
+        btnCobrar.addActionListener(e -> cobrarVenta());
+
+        panel.add(crearEtiqueta("Empleado responsable:", 14));
+        panel.add(cmbVendedor);
+        panel.add(Box.createVerticalStrut(10));
+
+        panel.add(lblUnidades);
+        panel.add(lblSubtotal);
+        panel.add(lblTotal);
+
+        panel.add(Box.createVerticalStrut(8));
+
+        panel.add(crearEtiqueta("Dinero recibido (USD):", 14));
+        panel.add(txtRecibido);
+
+        panel.add(Box.createVerticalStrut(8));
+        panel.add(lblCambio);
+        panel.add(Box.createVerticalStrut(10));
+        panel.add(btnCobrar);
+
+        return panel;
+    }
+
+    private JLabel crearEtiqueta(String texto, int tamano) {
+
+        JLabel etiqueta = new JLabel(texto);
+
+        etiqueta.setForeground(Color.BLACK);
+        etiqueta.setFont(
+            new Font("Arial", Font.BOLD, tamano)
+        );
+
+        return etiqueta;
+    }
+
+    // ==========================================
+    // MOSTRAR PRODUCTOS
+    // ==========================================
+
+    private void mostrarProductos() {
+
+        panelProductos.removeAll();
+        String busquedaTexto = txtBuscarProducto == null ? "" : txtBuscarProducto.getText().trim().toLowerCase(Locale.ROOT);
+
+        for (Producto p : inventario) {
+
+            if (!p.nombre.toLowerCase(Locale.ROOT).contains(busquedaTexto)) {
+                continue;
+            }
+
+            if (!categoriaActual.equals("Todos")
+                && !p.categoria.equals(categoriaActual)) {
+                continue;
+            }
+
+            JPanel tarjeta = new JPanel();
+
+            tarjeta.setLayout(
+                new BoxLayout(tarjeta, BoxLayout.Y_AXIS)
+            );
+
+            tarjeta.setBackground(BLANCO);
+
+            tarjeta.setBorder(
+                BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(
+                        new Color(215, 205, 195)
+                    ),
+                    new EmptyBorder(10, 10, 10, 10)
+                )
+                        );
+
+JLabel icono = new JLabel(p.icono);
+            icono.setFont(
+                new Font("Segoe UI Emoji", Font.PLAIN, 35)
+            );
+
+                    icono.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+JLabel nombre = new JLabel(p.nombre);
+            nombre.setForeground(Color.BLACK);
+            nombre.setFont(
+                new Font("Arial", Font.BOLD, 17)
+            );
+
+                    nombre.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+JLabel precio = new JLabel(
+        monedaUSD.format(p.precioCentavos / 100.0)
+);
+
+            precio.setForeground(new Color(110, 60, 30));
+        precio.setFont(
+                new Font("Arial", Font.BOLD, 19)
+            );
+
+                    precio.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+JLabel stock = new JLabel(
+        "Stock disponible: " + p.stock
+);
+
+            stock.setForeground(Color.BLACK);
+            stock.setFont(
+                new Font("Arial", Font.BOLD, 13)
+            );
+
+                    stock.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+JButton agregar = crearBoton(
+        "AGREGAR AL PEDIDO", VERDE
+);
+
+            agregar.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+            if (p.stock <= 0 || turnoFinalizado) {
+        agregar.setEnabled(false);
+            }
+
+                    agregar.addActionListener(
+        e -> agregarAlCarrito(p)
+            );
+
+                    tarjeta.add(icono);
+            tarjeta.add(Box.createVerticalStrut(5));
+        tarjeta.add(nombre);
+            tarjeta.add(precio);
+            tarjeta.add(stock);
+            tarjeta.add(Box.createVerticalStrut(8));
+        tarjeta.add(agregar);
+
+            panelProductos.add(tarjeta);
+        }
+
+                panelProductos.revalidate();
+        panelProductos.repaint();
+    }
+
+// ==========================================
+// AGREGAR AL CARRITO
+// ==========================================
+
+private void agregarAlCarrito(Producto p) {
+
+    if (turnoFinalizado) return;
+
+    int cantidad = carrito.getOrDefault(p, 0);
+
+    if (cantidad >= p.stock) {
+
+        JOptionPane.showMessageDialog(
+                this,
+                "No hay suficientes unidades de " + p.nombre
+        );
+
+        return;
+    }
+
+    carrito.put(p, cantidad + 1);
+
+    actualizarCarrito();
+    guardarDatos();
+}
+
+// ==========================================
+// ACTUALIZAR CARRITO
+// ==========================================
+
+private void actualizarCarrito() {
+
+    panelCarrito.removeAll();
+
+    long subtotal = 0;
+    int unidades = 0;
+
+    for (Map.Entry<Producto, Integer> entrada :
+            carrito.entrySet()) {
+
+        Producto p = entrada.getKey();
+        int cantidad = entrada.getValue();
+
+        long totalLinea =
+                p.precioCentavos * cantidad;
+
+        subtotal += totalLinea;
+        unidades += cantidad;
+
+        JPanel fila = new JPanel(
+                new BorderLayout(5, 5)
+        );
+
+        fila.setMaximumSize(
+                new Dimension(Integer.MAX_VALUE, 75)
+        );
+
+        fila.setBackground(BLANCO);
+        fila.setBorder(
+                new EmptyBorder(5, 2, 5, 2)
+        );
+
+        JPanel informacion = new JPanel(
+                new GridLayout(2, 1)
+        );
+
+        informacion.setOpaque(false);
+
+        // NOMBRE DEL PRODUCTO EN NEGRO Y NEGRITA
+        JLabel nombreProducto =
+                new JLabel(p.nombre);
+
+        nombreProducto.setForeground(Color.BLACK);
+        nombreProducto.setFont(
+                new Font("Arial", Font.BOLD, 15)
+        );
+
+        // PRECIO Y CANTIDAD
+        JLabel detalleProducto = new JLabel(
+                cantidad + " x " +
+                        monedaUSD.format(p.precioCentavos / 100.0)
+                        + " = " +
+                        monedaUSD.format(totalLinea / 100.0)
+        );
+
+        detalleProducto.setForeground(Color.BLACK);
+        detalleProducto.setFont(
+                new Font("Arial", Font.BOLD, 12)
+        );
+
+        informacion.add(nombreProducto);
+        informacion.add(detalleProducto);
+
+        // BOTONES DE CANTIDAD
+        JPanel botones = new JPanel(
+                new FlowLayout(FlowLayout.RIGHT, 3, 5)
+        );
+
+        botones.setOpaque(false);
+
+        JButton menos = crearBoton("-", CAFE);
+        JButton mas = crearBoton("+", VERDE);
+        JButton quitar = crearBoton("X", ROJO);
+
+        menos.addActionListener(
+                e -> cambiarCantidad(p, -1)
+        );
+
+        mas.addActionListener(
+                e -> cambiarCantidad(p, 1)
+        );
+
+        quitar.addActionListener(e -> {
+            carrito.remove(p);
+            actualizarCarrito();
+        });
+
+        botones.add(menos);
+        botones.add(mas);
+        botones.add(quitar);
+
+        fila.add(informacion, BorderLayout.CENTER);
+        fila.add(botones, BorderLayout.EAST);
+
+        panelCarrito.add(fila);
+        panelCarrito.add(new JSeparator());
+    }
+
+    totalActual = subtotal;
+
+    lblUnidades.setText("Unidades: " + unidades);
+
+    lblSubtotal.setText(
+            "Subtotal: " +
+                    monedaUSD.format(subtotal / 100.0)
+    );
+
+    lblTotal.setText(
+            "TOTAL: " +
+                    monedaUSD.format(subtotal / 100.0)
+    );
+
+    calcularCambio();
+
+    panelCarrito.revalidate();
+    panelCarrito.repaint();
+    guardarDatos();
+}
+
+// ==========================================
+// CAMBIAR CANTIDAD
+// ==========================================
+
+private void cambiarCantidad(
+        Producto p,
+        int cambio
+) {
+
+    int cantidad = carrito.getOrDefault(p, 0);
+    int nuevaCantidad = cantidad + cambio;
+
+    if (nuevaCantidad <= 0) {
+
+        carrito.remove(p);
+
+    } else if (nuevaCantidad <= p.stock) {
+
+        carrito.put(p, nuevaCantidad);
+
+    } else {
+
+        JOptionPane.showMessageDialog(
+                this,
+                "No hay más unidades disponibles."
+        );
+    }
+
+    actualizarCarrito();
+}
+
+// ==========================================
+// CALCULAR CAMBIO
+// ==========================================
+
+private void calcularCambio() {
+
+    if (txtRecibido == null || lblCambio == null) {
+        return;
+    }
+
+    try {
+
+        long recibido = convertirDinero(
+                txtRecibido.getText()
+        );
+
+        long cambio = recibido - totalActual;
+
+        lblCambio.setText(
+                "Cambio: " +
+                        monedaUSD.format(
+                                Math.max(0, cambio) / 100.0
+                        )
+        );
+
+    } catch (Exception e) {
+
+        lblCambio.setText("Cambio: US$0.00");
+    }
+}
+
+private long convertirDinero(String texto) {
+
+    String limpio = texto
+            .replace("$", "")
+            .replace("US", "")
+            .replace(",", "")
+            .trim();
+
+    if (limpio.isEmpty()) {
+        return 0;
+    }
+
+    BigDecimal valor = new BigDecimal(limpio);
+
+    return valor
+            .multiply(new BigDecimal("100"))
+            .longValueExact();
+}
+
+// ==========================================
+// COBRAR VENTA
+// ==========================================
+
+private void cobrarVenta() {
+
+    if (turnoFinalizado) return;
+
+    if (carrito.isEmpty()) {
+
+        JOptionPane.showMessageDialog(
+                this,
+                "Primero agrega productos al pedido."
+        );
+
+        return;
+    }
+
+    long recibido;
+
+    try {
+
+        recibido = convertirDinero(
+                txtRecibido.getText()
+        );
+
+    } catch (Exception e) {
+
+        JOptionPane.showMessageDialog(
+                this,
+                "Ingresa un valor válido. Ejemplo: 10.00"
+        );
+
+        return;
+    }
+
+    if (recibido < totalActual) {
+
+        JOptionPane.showMessageDialog(
+                this,
+                "El dinero recibido no alcanza."
+        );
+
+        return;
+    }
+
+    // COMPROBAR INVENTARIO
+    for (Map.Entry<Producto, Integer> entrada :
+            carrito.entrySet()) {
+
+        if (entrada.getValue() > entrada.getKey().stock) {
+
+            JOptionPane.showMessageDialog(
+                    this,
+                    "Stock insuficiente: " +
+                            entrada.getKey().nombre
+            );
+
+            return;
+        }
+    }
+
+    String vendedor = pedidoEnAtencion != null
+            ? pedidoEnAtencion.empleadoAsignado
+            : (String) cmbVendedor.getSelectedItem();
+
+    long total = totalActual;
+    long cambio = recibido - total;
+
+    // DESCONTAR STOCK
+    for (Map.Entry<Producto, Integer> entrada :
+            carrito.entrySet()) {
+
+        entrada.getKey().stock -= entrada.getValue();
+    }
+
+    // GUARDAR DETALLE DE LA VENTA
+    Map<Producto, Integer> detalleVenta =
+            new LinkedHashMap<>(carrito);
+
+    int numeroFactura = historial.size() + 1;
+    String fechaVenta = LocalDateTime.now().format(FORMATO_FECHA);
+    String clienteVenta = pedidoEnAtencion == null
+            ? "" : pedidoEnAtencion.nombreCliente;
+
+    Venta venta = new Venta(
+            numeroFactura,
+            fechaVenta,
+            vendedor,
+            clienteVenta,
+            total,
+            recibido,
+            cambio,
+            detalleVenta
+    );
+
+    historial.offer(venta);
+    try {
+        exportarVentaCSV(venta);
+    } catch (IOException ex) {
+        JOptionPane.showMessageDialog(this,
+                "La venta se guardó en el sistema, pero no se pudo actualizar "
+                        + "el Excel/CSV: " + ex.getMessage(),
+                "Aviso de reporte", JOptionPane.WARNING_MESSAGE);
+    }
+    guardarFacturaTexto(venta);
+
+    // ACTUALIZAR ESTADISTICAS
+    ventasPorVendedor.put(
+            vendedor,
+            ventasPorVendedor.get(vendedor) + 1
+    );
+
+    dineroPorVendedor.put(
+            vendedor,
+            dineroPorVendedor.get(vendedor) + total
+    );
+
+    // Persistir la venta antes de generar los archivos externos.
+    guardarDatos();
+
+    mostrarFactura(
+            vendedor,
+            total,
+            recibido,
+            cambio
+    );
+
+    carrito.clear();
+    txtRecibido.setText("");
+    pedidoEnAtencion = null;
+    actualizarEtiquetaAtencion();
+
+    actualizarCarrito();
+    mostrarProductos();
+    guardarDatos();
+}
+
+// ==========================================
+// FACTURA
+// ==========================================
+
+private void mostrarFactura(
+        String vendedor,
+        long total,
+        long recibido,
+        long cambio
+) {
+
+    StringBuilder factura = new StringBuilder();
+
+    factura.append("          COFFEESHOP\n");
+    factura.append("--------------------------------\n");
+
+    factura.append("Empleado: ")
+            .append(vendedor).append("\n");
+    if (pedidoEnAtencion != null) {
+        factura.append("Cliente: ").append(pedidoEnAtencion.nombreCliente).append("\n");
+        factura.append("Turno: ").append(pedidoEnAtencion.numeroTurno).append("\n");
+    }
+    factura.append("\n");
+
+    factura.append("PRODUCTOS:\n");
+
+    for (Map.Entry<Producto, Integer> entrada :
+            carrito.entrySet()) {
+
+        Producto p = entrada.getKey();
+        int cantidad = entrada.getValue();
+
+        factura.append(p.nombre)
+                .append(" x ")
+                .append(cantidad)
+                .append(" = ")
+                .append(monedaUSD.format(
+                        p.precioCentavos * cantidad / 100.0
+                ))
+                .append("\n");
+    }
+
+    factura.append("--------------------------------\n");
+
+    factura.append("TOTAL: ")
+            .append(monedaUSD.format(total / 100.0))
+            .append("\n");
+
+    factura.append("RECIBIDO: ")
+            .append(monedaUSD.format(recibido / 100.0))
+            .append("\n");
+
+    factura.append("CAMBIO: ")
+            .append(monedaUSD.format(cambio / 100.0))
+            .append("\n");
+
+    factura.append("--------------------------------\n");
+    factura.append("¡Gracias por tu compra!");
+
+    JTextArea area = new JTextArea(
+            factura.toString()
+    );
+
+    area.setEditable(false);
+    area.setForeground(Color.BLACK);
+    area.setBackground(Color.WHITE);
+
+    area.setFont(
+            new Font(Font.MONOSPACED, Font.BOLD, 13)
+    );
+
+    JOptionPane.showMessageDialog(
+            this,
+            new JScrollPane(area),
+            "Factura de venta",
+            JOptionPane.INFORMATION_MESSAGE
+    );
+}
+
+// ==========================================
+// ADMINISTRAR INVENTARIO
+// ==========================================
+
+private void administrarStock() {
+
+    if (turnoFinalizado) return;
+
+    String[] nombres = inventario.stream()
+            .map(p -> p.nombre)
+            .toArray(String[]::new);
+
+    String seleccionado =
+            (String) JOptionPane.showInputDialog(
+                    this,
+                    "Selecciona un producto:",
+                    "Administrar inventario",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    nombres,
+                    nombres[0]
+            );
+
+    if (seleccionado == null) return;
+
+    Producto producto = buscarProducto(seleccionado);
+
+    if (producto == null) return;
+
+    String cantidadTexto =
+            JOptionPane.showInputDialog(
+                    this,
+                    "Stock actual: " + producto.stock +
+                            "\n¿Cuántas unidades deseas agregar?"
+            );
+
+    if (cantidadTexto == null) return;
+
+    try {
+
+        int cantidad = Integer.parseInt(
+                cantidadTexto.trim()
+        );
+
+        if (cantidad <= 0) {
+            throw new NumberFormatException();
+        }
+
+        producto.stock += cantidad;
+        guardarDatos();
+
+        mostrarProductos();
+
+        JOptionPane.showMessageDialog(
+                this,
+                "Inventario actualizado.\n" +
+                        producto.nombre +
+                        "\nNuevo stock: " + producto.stock
+        );
+
+    } catch (NumberFormatException e) {
+
+        JOptionPane.showMessageDialog(
+                this,
+                "Ingresa una cantidad entera mayor que cero."
+        );
+    }
+}
+
+private Producto buscarProducto(String nombre) {
+
+    for (Producto p : inventario) {
+
+        if (p.nombre.equals(nombre)) {
+            return p;
+        }
+    }
+
+    return null;
+}
+
+// ==========================================
+// SISTEMA DE LLEGADA Y ATENCION DE CLIENTES
+// ==========================================
+
+   
+private void registrarLlegada() {
+
+    if (turnoFinalizado) {
+        JOptionPane.showMessageDialog(
+                this,
+                "El turno está finalizado. Inicia un nuevo turno para registrar clientes."
+        );
+        return;
+    }
+
+    String nombre = JOptionPane.showInputDialog(
+            this,
+            "Nombre del cliente:",
+            "Registrar llegada",
+            JOptionPane.QUESTION_MESSAGE
+    );
+
+    if (nombre == null) return;
+
+    nombre = nombre.trim().replaceAll("\\s+", " ");
+
+    if (nombre.isEmpty()) {
+        JOptionPane.showMessageDialog(
+                this,
+                "Debes ingresar el nombre del cliente."
+        );
+        return;
+    }
+
+    String nombreNormalizado = normalizarNombreCliente(nombre);
+
+    // Revisar únicamente los clientes que todavía están esperando.
+    boolean estaEnCola = colaLlegada.stream()
+            .anyMatch(p -> normalizarNombreCliente(
+                    p.nombreCliente
+            ).equals(nombreNormalizado));
+
+    // Revisar si el cliente está siendo atendido actualmente.
+    boolean estaEnAtencion = pedidoEnAtencion != null
+            && normalizarNombreCliente(
+                    pedidoEnAtencion.nombreCliente
+            ).equals(nombreNormalizado);
+
+    // Bloquear solamente si el pedido sigue activo.
+    if (estaEnCola || estaEnAtencion) {
+        JOptionPane.showMessageDialog(
+                this,
+                "Este cliente ya está esperando o está siendo atendido.",
+                "Cliente duplicado",
+                JOptionPane.WARNING_MESSAGE
+        );
+        return;
+    }
+
+    // Guardar el nombre como referencia histórica.
+    // Este registro NO debe impedir futuras compras.
+    clientesRegistrados.add(nombreNormalizado);
+
+    int indice = aleatorio.nextInt(vendedores.length);
+    String empleado = vendedores[indice];
+
+    Pedido pedido = new Pedido(
+            siguienteTurno++,
+            nombre,
+            empleado
+    );
+
+    colaLlegada.offer(pedido);
+
+    guardarDatos();
+    mostrarColaLlegada();
+}
+
+// Normaliza el nombre para detectar duplicados aunque cambien
+// mayúsculas, tildes o espacios. Los nombres completos diferentes
+// (por ejemplo, "Laura Sofia" y "Ana Sofia") se aceptan.
+private String normalizarNombreCliente(String nombre) {
+    String sinTildes = java.text.Normalizer.normalize(
+            nombre.trim().replaceAll("\\s+", " "),
+            java.text.Normalizer.Form.NFD
+    ).replaceAll("\\p{M}+", "");
+    return sinTildes.toLowerCase(Locale.ROOT);
+}
+
+private void atenderSiguiente() {
+    if (turnoFinalizado) return;
+    if (pedidoEnAtencion != null) {
+        JOptionPane.showMessageDialog(this,
+                "Primero termina o cancela el pedido que está en atención.");
+        return;
+    }
+    Pedido siguiente = colaLlegada.poll();
+    if (siguiente == null) {
+        JOptionPane.showMessageDialog(this, "No hay clientes esperando.");
+        return;
+    }
+    pedidoEnAtencion = siguiente;
+    cmbVendedor.setSelectedItem(siguiente.empleadoAsignado);
+    carrito.clear();
+    txtRecibido.setText("");
+    actualizarEtiquetaAtencion();
+    actualizarCarrito();
+    guardarDatos();
+    JOptionPane.showMessageDialog(this,
+            "Atendiendo turno: " + siguiente.numeroTurno +
+                    "\nCliente: " + siguiente.nombreCliente +
+                    "\nEmpleado asignado: " + siguiente.empleadoAsignado +
+                    "\n\nAhora agrega los productos al pedido.");
+}
+
+private void actualizarEtiquetaAtencion() {
+    if (lblPedidoAtencion == null) return;
+    if (pedidoEnAtencion == null) {
+        lblPedidoAtencion.setText("Sin cliente en atención");
+    } else {
+        lblPedidoAtencion.setText("Turno #" + pedidoEnAtencion.numeroTurno +
+                " | " + pedidoEnAtencion.nombreCliente +
+                " | " + pedidoEnAtencion.empleadoAsignado);
+    }
+}
+
+private void mostrarColaLlegada() {
+    StringBuilder texto = new StringBuilder("LISTA DE LLEGADA\n");
+    texto.append("----------------------------------\n");
+    if (colaLlegada.isEmpty()) texto.append("No hay clientes esperando.\n");
+    for (Pedido p : colaLlegada) {
+        texto.append("Turno #").append(p.numeroTurno)
+                .append(" - ").append(p.nombreCliente)
+                .append(" - Atiende: ").append(p.empleadoAsignado).append("\n");
+    }
+    if (pedidoEnAtencion != null) {
+        texto.append("\nEN ATENCION: Turno #").append(pedidoEnAtencion.numeroTurno)
+                .append(" - ").append(pedidoEnAtencion.nombreCliente)
+                .append(" - ").append(pedidoEnAtencion.empleadoAsignado).append("\n");
+    }
+    JTextArea area = new JTextArea(texto.toString(), 15, 38);
+    area.setEditable(false);
+    area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
+    JOptionPane.showMessageDialog(this, new JScrollPane(area),
+            "Cola de llegada", JOptionPane.INFORMATION_MESSAGE);
+}
+
+private void buscarEmpleadoPorId() {
+    String entrada = JOptionPane.showInputDialog(this,
+            "Ingresa el ID del empleado:\n1001 - Stefan Salvatore\n1002 - Enzo\n1003 - Katherine Pierce",
+            "Buscar empleado", JOptionPane.QUESTION_MESSAGE);
+    if (entrada == null) return;
+    try {
+        int id = Integer.parseInt(entrada.trim());
+        String nombre = empleadosPorId.get(id);
+        if (nombre == null) {
+            JOptionPane.showMessageDialog(this, "No existe un empleado con ID " + id);
+            return;
+        }
+        String informacion = "ID: " + id + "\nEmpleado: " + nombre +
+                "\nVentas realizadas: " + ventasPorVendedor.get(nombre) +
+                "\nTotal vendido: " + monedaUSD.format(dineroPorVendedor.get(nombre) / 100.0);
+        JOptionPane.showMessageDialog(this, informacion,
+                "Datos del empleado", JOptionPane.INFORMATION_MESSAGE);
+    } catch (NumberFormatException ex) {
+        JOptionPane.showMessageDialog(this, "El ID debe ser un número entero.");
+    }
+}
+
+// ==========================================
+// GUARDAR Y RECUPERAR DATOS DEL SISTEMA
+// ==========================================
+
+private void guardarDatos() {
+    File temporal = new File(CARPETA_DATOS, "coffeeshop_datos.tmp");
+    try {
+        if (!CARPETA_DATOS.exists() && !CARPETA_DATOS.mkdirs()) {
+            throw new IOException("No se pudo crear la carpeta " + CARPETA_DATOS);
+        }
+
+        DatosSistema datos = new DatosSistema();
+        datos.inventario = new ArrayList<>(inventario);
+        datos.historial = new ArrayList<>(historial);
+        datos.colaLlegada = new ArrayList<>(colaLlegada);
+        datos.ventasPorVendedor = new LinkedHashMap<>(ventasPorVendedor);
+        datos.dineroPorVendedor = new LinkedHashMap<>(dineroPorVendedor);
+        datos.siguienteTurno = siguienteTurno;
+        datos.pedidoEnAtencion = pedidoEnAtencion;
+        datos.carrito = new LinkedHashMap<>(carrito);
+        datos.turnoFinalizado = turnoFinalizado;
+        datos.clientesRegistrados = new LinkedHashSet<>(clientesRegistrados);
+
+        try (ObjectOutputStream salida = new ObjectOutputStream(
+                new FileOutputStream(temporal))) {
+            salida.writeObject(datos);
+            salida.flush();
+        }
+
+        try {
+            Files.move(temporal.toPath(), ARCHIVO_DATOS.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException ex) {
+            Files.move(temporal.toPath(), ARCHIVO_DATOS.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
+        }
+    } catch (IOException ex) {
+        temporal.delete();
+        JOptionPane.showMessageDialog(this,
+                "No se pudieron guardar los datos: " + ex.getMessage(),
+                "Error al guardar", JOptionPane.ERROR_MESSAGE);
+    }
+}
+
+private void cargarDatos() {
+    // Compatibilidad: si existe el archivo antiguo junto al proyecto,
+    // se usa para recuperar los datos por primera vez.
+    File archivo = ARCHIVO_DATOS.exists()
+            ? ARCHIVO_DATOS : new File("coffeeshop_datos.dat");
+    if (!archivo.exists()) return;
+
+    try (ObjectInputStream entrada = new ObjectInputStream(
+            new FileInputStream(archivo))) {
+        DatosSistema datos = (DatosSistema) entrada.readObject();
+
+        if (datos.inventario != null) {
+            inventario.clear();
+            inventario.addAll(datos.inventario);
+        }
+        if (datos.historial != null) {
+            historial.clear();
+            historial.addAll(datos.historial);
+        }
+        if (datos.colaLlegada != null) {
+            colaLlegada.clear();
+            colaLlegada.addAll(datos.colaLlegada);
+        }
+        if (datos.ventasPorVendedor != null) {
+            ventasPorVendedor.clear();
+            ventasPorVendedor.putAll(datos.ventasPorVendedor);
+        }
+        if (datos.dineroPorVendedor != null) {
+            dineroPorVendedor.clear();
+            dineroPorVendedor.putAll(datos.dineroPorVendedor);
+        }
+
+        siguienteTurno = Math.max(1, datos.siguienteTurno);
+        pedidoEnAtencion = datos.pedidoEnAtencion;
+        carrito.clear();
+        if (datos.carrito != null) {
+            carrito.putAll(datos.carrito);
+        }
+        turnoFinalizado = datos.turnoFinalizado;
+
+        // Recuperar clientes. Si el archivo es de una versión anterior,
+        // reconstruir el registro usando los clientes ya guardados.
+        clientesRegistrados.clear();
+        if (datos.clientesRegistrados != null) {
+            clientesRegistrados.addAll(datos.clientesRegistrados);
+        }
+        for (Venta venta : historial) {
+            if (venta.cliente != null && !venta.cliente.trim().isEmpty()) {
+                clientesRegistrados.add(normalizarNombreCliente(venta.cliente));
+            }
+        }
+        for (Pedido pedido : colaLlegada) {
+            if (pedido.nombreCliente != null && !pedido.nombreCliente.trim().isEmpty()) {
+                clientesRegistrados.add(normalizarNombreCliente(pedido.nombreCliente));
+            }
+        }
+        if (pedidoEnAtencion != null && pedidoEnAtencion.nombreCliente != null
+                && !pedidoEnAtencion.nombreCliente.trim().isEmpty()) {
+            clientesRegistrados.add(normalizarNombreCliente(pedidoEnAtencion.nombreCliente));
+        }
+
+        // Asegurar que vendedores nuevos o faltantes tengan estadísticas.
+        for (String vendedor : vendedores) {
+            ventasPorVendedor.putIfAbsent(vendedor, 0);
+            dineroPorVendedor.putIfAbsent(vendedor, 0L);
+        }
+    } catch (IOException | ClassNotFoundException | ClassCastException ex) {
+        JOptionPane.showMessageDialog(this,
+                "No se pudieron recuperar los datos guardados: " + ex.getMessage()
+                        + "\\nEl archivo se conserva para no perder la información.",
+                "Error al cargar", JOptionPane.ERROR_MESSAGE);
+    }
+}
+
+// Reconstruye el reporte desde el historial guardado. Así el Excel
+// también conserva las ventas anteriores y nunca duplica filas al abrir.
+private void reconstruirReporteCSV() {
+    try {
+        if (!CARPETA_DATOS.exists() && !CARPETA_DATOS.mkdirs()) {
+            throw new IOException("No se pudo crear la carpeta de reportes.");
+        }
+        Files.deleteIfExists(ARCHIVO_VENTAS.toPath());
+
+        int consecutivo = 1;
+        for (Venta venta : historial) {
+            if (venta.numeroFactura <= 0) {
+                venta.numeroFactura = consecutivo;
+            }
+            if (venta.fecha == null) {
+                venta.fecha = "";
+            }
+            if (venta.cliente == null) {
+                venta.cliente = "";
+            }
+            exportarVentaCSV(venta);
+            consecutivo++;
+        }
+    } catch (IOException ex) {
+        JOptionPane.showMessageDialog(this,
+                "No se pudo reconstruir el reporte de Excel: " + ex.getMessage(),
+                "Aviso de reporte", JOptionPane.WARNING_MESSAGE);
+    }
+}
+
+// Registra cada producto vendido en un CSV que Excel puede abrir.
+// Se escribe una fila por producto para que el reporte pueda filtrarse.
+private void exportarVentaCSV(Venta venta) throws IOException {
+    if (!CARPETA_DATOS.exists() && !CARPETA_DATOS.mkdirs()) {
+        throw new IOException("No se pudo crear la carpeta de reportes.");
+    }
+
+    boolean escribirEncabezado =
+            !ARCHIVO_VENTAS.exists() || ARCHIVO_VENTAS.length() == 0;
+
+    try (BufferedWriter writer = Files.newBufferedWriter(
+            ARCHIVO_VENTAS.toPath(), StandardCharsets.UTF_8,
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.APPEND)) {
+
+        if (escribirEncabezado) {
+            writer.write(0xFEFF); // Excel reconoce correctamente tildes y ñ.
+            writer.write("Fecha;Factura;Vendedor;Cliente;Producto;Cantidad;"
+                    + "Precio unitario;Subtotal producto;Total factura;Recibido;Cambio");
+            writer.newLine();
+        }
+
+        String cliente = venta.cliente == null ? "" : venta.cliente;
+        for (Map.Entry<Producto, Integer> item : venta.detalle.entrySet()) {
+            Producto producto = item.getKey();
+            int cantidad = item.getValue();
+            long subtotalLinea = producto.precioCentavos * cantidad;
+
+            String[] columnas = {
+                    venta.fecha,
+                    String.valueOf(venta.numeroFactura),
+                    venta.vendedor,
+                    cliente,
+                    producto.nombre,
+                    String.valueOf(cantidad),
+                    formatoCSVdinero(producto.precioCentavos),
+                    formatoCSVdinero(subtotalLinea),
+                    formatoCSVdinero(venta.totalCentavos),
+                    formatoCSVdinero(venta.recibidoCentavos),
+                    formatoCSVdinero(venta.cambioCentavos)
+            };
+
+            for (int i = 0; i < columnas.length; i++) {
+                if (i > 0) writer.write(";");
+                writer.write(escaparCSV(columnas[i]));
+            }
+            writer.newLine();
+        }
+    }
+}
+
+private String formatoCSVdinero(long centavos) {
+    return String.format(Locale.US, "%.2f", centavos / 100.0);
+}
+
+private String escaparCSV(String valor) {
+    if (valor == null) return "";
+    return "\"" + valor.replace("\"", "\"\"") + "\"";
+}
+
+// Guarda una factura individual en formato TXT, además de mostrarla.
+private void guardarFacturaTexto(Venta venta) {
+    try {
+        if (!CARPETA_FACTURAS.exists() && !CARPETA_FACTURAS.mkdirs()) {
+            throw new IOException("No se pudo crear la carpeta de facturas.");
+        }
+
+        String nombreArchivo = String.format(Locale.ROOT,
+                "factura_%06d.txt", venta.numeroFactura);
+        File archivo = new File(CARPETA_FACTURAS, nombreArchivo);
+
+        StringBuilder texto = new StringBuilder();
+        texto.append("                 COFFEESHOP\\n");
+        texto.append("FACTURA No.: ").append(venta.numeroFactura).append("\\n");
+        texto.append("Fecha: ").append(venta.fecha).append("\\n");
+        texto.append("Empleado: ").append(venta.vendedor).append("\\n");
+        if (venta.cliente != null && !venta.cliente.isEmpty()) {
+            texto.append("Cliente: ").append(venta.cliente).append("\\n");
+        }
+        texto.append("------------------------------------------\\n");
+        texto.append("PRODUCTO       CANT.       SUBTOTAL\\n");
+        for (Map.Entry<Producto, Integer> item : venta.detalle.entrySet()) {
+            Producto producto = item.getKey();
+            int cantidad = item.getValue();
+            texto.append(producto.nombre).append(" x ")
+                    .append(cantidad).append("       ")
+                    .append(monedaUSD.format(
+                            producto.precioCentavos * cantidad / 100.0))
+                    .append("\\n");
+        }
+        texto.append("------------------------------------------\\n");
+        texto.append("TOTAL: ").append(monedaUSD.format(
+                venta.totalCentavos / 100.0)).append("\\n");
+        texto.append("RECIBIDO: ").append(monedaUSD.format(
+                venta.recibidoCentavos / 100.0)).append("\\n");
+        texto.append("CAMBIO: ").append(monedaUSD.format(
+                venta.cambioCentavos / 100.0)).append("\\n");
+        texto.append("------------------------------------------\\n");
+        texto.append("          ¡Gracias por tu compra!\\n");
+
+        Files.write(archivo.toPath(), texto.toString().getBytes(StandardCharsets.UTF_8));
+
+        // Una hoja CSV individual por venta, que Excel puede abrir.
+        File archivoCSV = new File(CARPETA_FACTURAS,
+                String.format(Locale.ROOT, "venta_%06d.csv", venta.numeroFactura));
+        try (BufferedWriter writer = Files.newBufferedWriter(
+                archivoCSV.toPath(), StandardCharsets.UTF_8)) {
+            writer.write(0xFEFF);
+            writer.write("Fecha;Factura;Vendedor;Cliente;Producto;Cantidad;"
+                    + "Precio unitario;Subtotal producto;Total factura;Recibido;Cambio");
+            writer.newLine();
+
+            for (Map.Entry<Producto, Integer> item : venta.detalle.entrySet()) {
+                Producto producto = item.getKey();
+                int cantidad = item.getValue();
+                String[] columnas = {
+                        venta.fecha,
+                        String.valueOf(venta.numeroFactura),
+                        venta.vendedor,
+                        venta.cliente == null ? "" : venta.cliente,
+                        producto.nombre,
+                        String.valueOf(cantidad),
+                        formatoCSVdinero(producto.precioCentavos),
+                        formatoCSVdinero(producto.precioCentavos * cantidad),
+                        formatoCSVdinero(venta.totalCentavos),
+                        formatoCSVdinero(venta.recibidoCentavos),
+                        formatoCSVdinero(venta.cambioCentavos)
+                };
+                for (int i = 0; i < columnas.length; i++) {
+                    if (i > 0) writer.write(";");
+                    writer.write(escaparCSV(columnas[i]));
+                }
+                writer.newLine();
+            }
+        }
+    } catch (IOException ex) {
+        JOptionPane.showMessageDialog(this,
+                "La venta se registró, pero no se pudo crear el archivo de factura: "
+                        + ex.getMessage(),
+                "Aviso de factura", JOptionPane.WARNING_MESSAGE);
+    }
+}
+
+private static class Pedido implements Serializable {
+    private static final long serialVersionUID = 1L;
+    int numeroTurno;
+    String nombreCliente;
+    String empleadoAsignado;
+
+    Pedido(int numeroTurno, String nombreCliente, String empleadoAsignado) {
+        this.numeroTurno = numeroTurno;
+        this.nombreCliente = nombreCliente;
+        this.empleadoAsignado = empleadoAsignado;
+    }
+}
+
+private static class DatosSistema implements Serializable {
+    private static final long serialVersionUID = 1L;
+    List<Producto> inventario;
+    List<Venta> historial;
+    List<Pedido> colaLlegada;
+    Map<String, Integer> ventasPorVendedor;
+    Map<String, Long> dineroPorVendedor;
+    int siguienteTurno;
+    Pedido pedidoEnAtencion;
+    Map<Producto, Integer> carrito;
+    boolean turnoFinalizado;
+    Set<String> clientesRegistrados;
+}
+
+// ==========================================
+// CANCELAR PEDIDO
+// ==========================================
+
+private void cancelarPedido() {
+
+    if (carrito.isEmpty() && pedidoEnAtencion == null) {
+    JOptionPane.showMessageDialog(
+            this,
+            "No hay ningún pedido para cancelar."
+    );
+    return;
+}
+
+    int respuesta = JOptionPane.showConfirmDialog(
+            this,
+            "¿Deseas cancelar el pedido actual?",
+            "Cancelar pedido",
+            JOptionPane.YES_NO_OPTION
+    );
+
+    if (respuesta == JOptionPane.YES_OPTION) {
+
+        carrito.clear();
+        txtRecibido.setText("");
+        pedidoEnAtencion = null;
+        actualizarEtiquetaAtencion();
+        actualizarCarrito();
+        guardarDatos();
+    }
+}
+
+// ==========================================
+// NUEVA VENTA
+// ==========================================
+
+private void nuevaVenta() {
+
+    if (turnoFinalizado) return;
+
+    carrito.clear();
+    txtRecibido.setText("");
+
+    actualizarCarrito();
+    mostrarProductos();
+}
+
+// ==========================================
+// REPORTE FINAL DEL TURNO
+// ==========================================
+
+private void finalizarTurno() {
+
+    if (turnoFinalizado) return;
+if (pedidoEnAtencion != null || !colaLlegada.isEmpty()
+            || !carrito.isEmpty()) {
+
+        JOptionPane.showMessageDialog(this,
+                "No puedes finalizar el turno mientras haya "
+                        + "pedidos pendientes o productos en el carrito.");
+
+        return;
+    }
+    int respuesta = JOptionPane.showConfirmDialog(
+            this,
+            "¿Deseas finalizar el turno y generar el reporte?",
+            "Cierre de caja",
+            JOptionPane.YES_NO_OPTION
+    );
+
+    if (respuesta != JOptionPane.YES_OPTION) {
+        return;
+    }
+
+    StringBuilder reporte = new StringBuilder();
+
+    reporte.append("       REPORTE DE COFFEESHOP\n");
+    reporte.append("--------------------------------------\n");
+
+    reporte.append("Ventas realizadas: ")
+            .append(historial.size())
+            .append("\n\n");
+
+    long mayorDinero = -1;
+    int mayorVentas = -1;
+
+    for (String vendedor : vendedores) {
+
+        int cantidad = ventasPorVendedor.get(vendedor);
+        long dinero = dineroPorVendedor.get(vendedor);
+
+        reporte.append(vendedor).append("\n");
+
+        reporte.append("Cantidad de ventas: ")
+                .append(cantidad).append("\n");
+
+        reporte.append("Total vendido: ")
+                .append(monedaUSD.format(dinero / 100.0))
+                .append("\n\n");
+
+        mayorDinero = Math.max(mayorDinero, dinero);
+        mayorVentas = Math.max(mayorVentas, cantidad);
+    }
+
+    long totalGeneral = 0;
+
+    for (Venta v : historial) {
+        totalGeneral += v.totalCentavos;
+    }
+
+    reporte.append("--------------------------------------\n");
+
+    reporte.append("TOTAL GENERAL: ")
+            .append(monedaUSD.format(totalGeneral / 100.0))
+            .append("\n\n");
+
+    reporte.append("MAYOR VENTA EN DINERO:\n");
+
+    for (String vendedor : vendedores) {
+
+        if (dineroPorVendedor.get(vendedor) == mayorDinero) {
+
+            reporte.append("- ")
+                    .append(vendedor)
+                    .append(": ")
+                    .append(monedaUSD.format(mayorDinero / 100.0))
+                    .append("\n");
+        }
+    }
+
+    reporte.append("\nMAYOR NUMERO DE VENTAS:\n");
+
+    for (String vendedor : vendedores) {
+
+        if (ventasPorVendedor.get(vendedor) == mayorVentas) {
+
+            reporte.append("- ")
+                    .append(vendedor)
+                    .append(": ")
+                    .append(mayorVentas)
+                    .append(" ventas\n");
+        }
+    }
+
+    reporte.append("\nProductos diferentes: ")
+            .append(productosUnicos.size());
+
+    JTextArea area = new JTextArea(
+            reporte.toString()
+    );
+
+    area.setEditable(false);
+    area.setFont(
+            new Font(Font.MONOSPACED, Font.BOLD, 13)
+    );
+
+    area.setForeground(Color.BLACK);
+    area.setBackground(Color.WHITE);
+
+    JOptionPane.showMessageDialog(
+            this,
+            new JScrollPane(area),
+            "Reporte final del turno",
+            JOptionPane.INFORMATION_MESSAGE
+    );
+
+    turnoFinalizado = true;
+    guardarDatos();
+
+    carrito.clear();
+    pedidoEnAtencion = null;
+    txtRecibido.setText("");
+
+    actualizarEtiquetaAtencion();
+    actualizarCarrito();
+    mostrarProductos();
+    guardarDatos();
+}
+
+// ==========================================
+// SALIR DEL SISTEMA
+// ==========================================
+
+private void salirDelSistema() {
+
+    int respuesta = JOptionPane.showConfirmDialog(
+            this,
+            "¿Estás seguro de que deseas cerrar COFFEESHOP?",
+            "Salir del sistema",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.QUESTION_MESSAGE
+    );
+
+if (respuesta == JOptionPane.YES_OPTION) {
+    guardarDatos();
+    dispose();
+    System.exit(0);
+}
+    }
+
+
+// ==========================================
+// CREAR BOTONES
+// ==========================================
+
+private JButton crearBoton(
+        String texto,
+        Color color
+) {
+
+    JButton boton = new JButton(texto);
+
+    boton.setUI(
+            new javax.swing.plaf.basic.BasicButtonUI()
+    );
+
+    // FONDO CLARO Y TEXTO NEGRO
+    boton.setBackground(FONDO);
+    boton.setForeground(Color.BLACK);
+
+    // LETRAS GRUESAS
+    boton.setFont(
+            new Font("Arial", Font.BOLD, 14)
+    );
+
+    boton.setOpaque(true);
+    boton.setContentAreaFilled(true);
+    boton.setBorderPainted(true);
+    boton.setFocusPainted(false);
+
+    boton.setBorder(
+            BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(color, 2),
+                    BorderFactory.createEmptyBorder(10, 14, 10, 14)
+            )
+    );
+
+    boton.setCursor(
+            new Cursor(Cursor.HAND_CURSOR)
+    );
+
+    return boton;
+}
+
+// ==========================================
+// CLASE PRODUCTO
+// ==========================================
+
+private static class Producto implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    String nombre;
+    String categoria;
+    long precioCentavos;
+    int stock;
+    String icono;
+
+    Producto(
+            String nombre,
+            String categoria,
+            long precioCentavos,
+            int stock,
+            String icono
+    ) {
+
+        this.nombre = nombre;
+        this.categoria = categoria;
+        this.precioCentavos = precioCentavos;
+        this.stock = stock;
+        this.icono = icono;
+    }
+}
+
+// ==========================================
+// CLASE VENTA
+// ==========================================
+
+private static class Venta implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    int numeroFactura;
+    String fecha;
+    String vendedor;
+    String cliente;
+    long totalCentavos;
+    long recibidoCentavos;
+    long cambioCentavos;
+    Map<Producto, Integer> detalle;
+
+    Venta(
+            int numeroFactura,
+            String fecha,
+            String vendedor,
+            String cliente,
+            long totalCentavos,
+            long recibidoCentavos,
+            long cambioCentavos,
+            Map<Producto, Integer> detalle
+    ) {
+        this.numeroFactura = numeroFactura;
+        this.fecha = fecha;
+        this.vendedor = vendedor;
+        this.cliente = cliente;
+        this.totalCentavos = totalCentavos;
+        this.recibidoCentavos = recibidoCentavos;
+        this.cambioCentavos = cambioCentavos;
+        this.detalle = detalle;
+    }
+}
+
+// ==========================================
+// INICIO DEL PROGRAMA
+// ==========================================
+
+public static void main(String[] args) {
+
+    SwingUtilities.invokeLater(() -> {
+
+        try {
+
+            UIManager.setLookAndFeel(
+                    UIManager.getSystemLookAndFeelClassName()
+            );
+
+            UIManager.put(
+                    "OptionPane.messageForeground",
+                    Color.BLACK
+            );
+
+            UIManager.put(
+                    "Label.foreground",
+                    Color.BLACK
+            );
+
+            UIManager.put(
+                    "TextField.foreground",
+                    Color.BLACK
+            );
+
+            UIManager.put(
+                    "TextArea.foreground",
+                    Color.BLACK
+            );
+
+            Main ventana = new Main();
+            ventana.setVisible(true);
+
+        } catch (Exception e) {
+
+            e.printStackTrace();
+
+            JOptionPane.showMessageDialog(
+                    null,
+                    "No se pudo abrir COFFEESHOP:\n" +
+                            e.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE
+            );
+        }
+    });
+}
+}
